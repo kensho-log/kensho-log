@@ -129,6 +129,116 @@ class TestWriteFrames:
             )
 
 
+class TestTitleCard:
+    def test_writes_num_frames(self, tmp_path):
+        produced = tra.write_titlecard_frames(
+            ["line1", "line2"], tmp_path, "c0ffee" * 7,
+            num_frames=5, fade_in_frames=2,
+        )
+        assert len(produced) == 5
+        for p in produced:
+            assert p.exists()
+            assert _is_png(p)
+
+    def test_start_index_offsets_filenames(self, tmp_path):
+        produced = tra.write_titlecard_frames(
+            ["hello"], tmp_path, "deadbeef" * 5,
+            num_frames=3, start_index=100, fade_in_frames=0,
+        )
+        names = sorted(p.name for p in produced)
+        assert names == ["frame_00100.png", "frame_00101.png", "frame_00102.png"]
+
+    def test_zero_frames_raises(self, tmp_path):
+        with pytest.raises(ValueError):
+            tra.write_titlecard_frames(["x"], tmp_path, "h" * 40, num_frames=0)
+
+    def test_negative_fade_raises(self, tmp_path):
+        with pytest.raises(ValueError):
+            tra.write_titlecard_frames(
+                ["x"], tmp_path, "h" * 40, num_frames=5, fade_in_frames=-1,
+            )
+
+
+class TestConditionsCard:
+    def test_writes_num_frames(self, tmp_path):
+        conditions = [
+            ("A", "label_a", "desc_a"),
+            ("B", "label_b", "desc_b"),
+            ("C", "label_c", "desc_c"),
+        ]
+        produced = tra.write_conditions_frames(
+            conditions, tmp_path, "abcdef" * 7, num_frames=4,
+        )
+        assert len(produced) == 4
+        assert all(p.exists() and _is_png(p) for p in produced)
+
+    def test_empty_conditions_raises(self, tmp_path):
+        with pytest.raises(ValueError):
+            tra.write_conditions_frames([], tmp_path, "x" * 40, num_frames=3)
+
+
+class TestFinale:
+    def test_writes_num_frames(self, tmp_path):
+        produced = tra.write_finale_frames(
+            final_values={"A": 10_000_000.0, "B": 8_000_000.0, "C": 6_000_000.0},
+            invested_total=5_000_000.0,
+            frames_dir=tmp_path,
+            commit_hash="f00d" * 10,
+            num_frames=6,
+        )
+        assert len(produced) == 6
+        assert all(_is_png(p) for p in produced)
+
+    def test_bad_keys_raises(self, tmp_path):
+        with pytest.raises(ValueError):
+            tra.write_finale_frames(
+                final_values={"X": 1.0, "Y": 2.0},
+                invested_total=1.0,
+                frames_dir=tmp_path,
+                commit_hash="x" * 40,
+                num_frames=3,
+            )
+
+    def test_bad_odometer_ratio_raises(self, tmp_path):
+        with pytest.raises(ValueError):
+            tra.write_finale_frames(
+                final_values={"A": 1.0, "B": 1.0, "C": 1.0},
+                invested_total=1.0,
+                frames_dir=tmp_path,
+                commit_hash="x" * 40,
+                num_frames=3,
+                odometer_ratio=0.0,
+            )
+
+
+class TestLimits:
+    def test_writes_num_frames(self, tmp_path):
+        produced = tra.write_limits_frames(
+            ["a", "b", "c"], tmp_path, "c" * 40, num_frames=4,
+        )
+        assert len(produced) == 4
+        assert all(_is_png(p) for p in produced)
+
+    def test_empty_bullets_raises(self, tmp_path):
+        with pytest.raises(ValueError):
+            tra.write_limits_frames([], tmp_path, "c" * 40, num_frames=3)
+
+
+class TestStartIndexChaining:
+    def test_timing_race_frames_respect_start_index(self, tmp_path):
+        result = _sample_result(5)
+        produced = tra.write_timing_race_frames(
+            result=result,
+            frames_dir=tmp_path,
+            commit_hash="b" * 40,
+            start_index=200,
+        )
+        assert len(produced) == 5
+        names = sorted(p.name for p in produced)
+        assert names[0] == "frame_00200.png"
+        assert names[-1] == "frame_00204.png"
+
+
 class TestFfmpegCommandBuilder:
     def test_command_includes_input_glob_and_output(self, monkeypatch):
         monkeypatch.setattr(tra, "_ffmpeg_binary", lambda: "ffmpeg")

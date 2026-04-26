@@ -115,6 +115,19 @@ def _format_jpy(v: float) -> str:
     return f"{int(round(v)):,}"
 
 
+def _draw_footer_chrome(fig, commit_hash: str, fonts: _FontPair) -> None:
+    fig.text(
+        0.99, 0.015, f"commit {commit_hash[:12]}",
+        ha="right", va="bottom", fontsize=8, color="#777777",
+        fontproperties=fonts.mono,
+    )
+    fig.text(
+        0.01, 0.015, "kensho-log  verification log",
+        ha="left", va="bottom", fontsize=8, color="#777777",
+        fontproperties=fonts.mincho,
+    )
+
+
 def write_timing_race_frames(
     result: pd.DataFrame,
     frames_dir: Path | str,
@@ -126,6 +139,8 @@ def write_timing_race_frames(
     title: str = "Hypothesis 001 - Timing Race",
     subtitle: str = "S&P 500 Total Return",
     filename_template: str = "frame_{:05d}.png",
+    start_index: int = 0,
+    event_markers: list[tuple[pd.Timestamp, str]] | None = None,
 ) -> list[Path]:
     """result DataFrame から PNG フレーム群を frames_dir に生成する。
 
@@ -138,6 +153,8 @@ def write_timing_race_frames(
         dpi / figsize: 出力解像度（figsize * dpi = pixel size）
         title / subtitle: 静的タイトル
         filename_template: 連番フォーマット
+        start_index: 出力ファイル名の開始番号（story モードで複数フェーズ連結時に使用）
+        event_markers: (Timestamp, ラベル) のリスト。該当月以降、縦破線でマーク。
 
     Returns:
         生成されたフレームの Path リスト（昇順）
@@ -168,6 +185,8 @@ def write_timing_race_frames(
         idxs.append(len(result) - 1)
     if max_frames is not None and max_frames > 0:
         idxs = idxs[:max_frames]
+
+    marker_list = list(event_markers or [])
 
     produced: list[Path] = []
     for fi, row_i in enumerate(idxs):
@@ -208,6 +227,18 @@ def write_timing_race_frames(
         ax.spines["bottom"].set_color(GRID_COLOR)
 
         current_date = visible.index[-1]
+
+        for m_date, m_label in marker_list:
+            if current_date >= m_date and m_date >= x_full.min() and m_date <= x_full.max():
+                ax.axvline(
+                    x=m_date, color="#d27171", linewidth=0.8,
+                    linestyle=(0, (2, 3)), alpha=0.55,
+                )
+                ax.text(
+                    m_date, y_cap * 0.04, f" {m_label}",
+                    ha="left", va="bottom", fontsize=8.5, color="#c59090",
+                    fontproperties=fonts.mincho, alpha=0.85,
+                )
 
         fig.text(
             0.03, 0.955, title,
@@ -262,23 +293,310 @@ def write_timing_race_frames(
 
         ax.get_legend().remove() if ax.get_legend() else None
 
-        fig.text(
-            0.99, 0.015, f"commit {commit_hash[:12]}",
-            ha="right", va="bottom", fontsize=8, color="#777777",
-            fontproperties=fonts.mono,
-        )
-        fig.text(
-            0.01, 0.015, "kensho-log  verification log",
-            ha="left", va="bottom", fontsize=8, color="#777777",
-            fontproperties=fonts.mincho,
-        )
+        _draw_footer_chrome(fig, commit_hash, fonts)
 
-        frame_path = frames_dir / filename_template.format(fi)
+        frame_path = frames_dir / filename_template.format(start_index + fi)
         fig.savefig(frame_path, dpi=dpi)
         plt.close(fig)
         produced.append(frame_path)
 
     logger.info("wrote %d frames to %s", len(produced), frames_dir)
+    return produced
+
+
+def _fade_alpha(i: int, total: int, fade_in: int) -> float:
+    """0..fade_in で 0→1、以降 1 のキッカリしたフェードインカーブ。"""
+    if fade_in <= 0:
+        return 1.0
+    if i >= fade_in:
+        return 1.0
+    return max(0.0, min(1.0, i / fade_in))
+
+
+def _fresh_canvas(figsize: tuple[float, float], dpi: int):
+    fig = plt.figure(figsize=figsize, dpi=dpi)
+    fig.patch.set_facecolor(BG_COLOR)
+    return fig
+
+
+def write_titlecard_frames(
+    lines: list[str],
+    frames_dir: Path | str,
+    commit_hash: str,
+    num_frames: int,
+    *,
+    start_index: int = 0,
+    fade_in_frames: int = 15,
+    dpi: int = DPI_720P,
+    figsize: tuple[float, float] = FIGSIZE_720P,
+    filename_template: str = "frame_{:05d}.png",
+    font_size: int = 30,
+    line_spacing: float = 0.09,
+) -> list[Path]:
+    """黒背景のタイトルカード（疑問提示用）を num_frames 枚生成する。
+
+    Args:
+        lines: 中央に縦に並べる明朝テキスト行
+        num_frames: 生成フレーム数
+        fade_in_frames: 先頭で 0→1 にアルファを上げるフレーム数
+    """
+    if num_frames <= 0:
+        raise ValueError("num_frames must be positive")
+    if fade_in_frames < 0:
+        raise ValueError("fade_in_frames must be >= 0")
+
+    frames_dir = Path(frames_dir)
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    _apply_dark_style()
+    fonts = _get_fonts()
+
+    produced: list[Path] = []
+    n = len(lines)
+    center_y = 0.5 + (n - 1) * line_spacing / 2
+    for i in range(num_frames):
+        alpha = _fade_alpha(i, num_frames, fade_in_frames)
+        fig = _fresh_canvas(figsize, dpi)
+        for j, text in enumerate(lines):
+            y = center_y - j * line_spacing
+            fig.text(
+                0.5, y, text,
+                ha="center", va="center",
+                fontsize=font_size, color=FG_COLOR,
+                fontproperties=fonts.mincho, alpha=alpha,
+            )
+        _draw_footer_chrome(fig, commit_hash, fonts)
+        frame_path = frames_dir / filename_template.format(start_index + i)
+        fig.savefig(frame_path, dpi=dpi)
+        plt.close(fig)
+        produced.append(frame_path)
+    return produced
+
+
+def write_conditions_frames(
+    conditions: list[tuple[str, str, str]],
+    frames_dir: Path | str,
+    commit_hash: str,
+    num_frames: int,
+    *,
+    heading: str = "検証条件",
+    start_index: int = 0,
+    fade_in_frames: int = 10,
+    dpi: int = DPI_720P,
+    figsize: tuple[float, float] = FIGSIZE_720P,
+    filename_template: str = "frame_{:05d}.png",
+) -> list[Path]:
+    """条件カード。conditions = [(symbol, label, description), ...]。"""
+    if num_frames <= 0:
+        raise ValueError("num_frames must be positive")
+    if not conditions:
+        raise ValueError("conditions must not be empty")
+
+    frames_dir = Path(frames_dir)
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    _apply_dark_style()
+    fonts = _get_fonts()
+
+    palette = [COLOR_A, COLOR_B, COLOR_C, "#8b8b8b", "#8b8b8b"]
+
+    produced: list[Path] = []
+    for i in range(num_frames):
+        alpha = _fade_alpha(i, num_frames, fade_in_frames)
+        fig = _fresh_canvas(figsize, dpi)
+
+        fig.text(
+            0.5, 0.82, heading,
+            ha="center", va="center", fontsize=22, color=FG_COLOR,
+            fontproperties=fonts.mincho, alpha=alpha,
+        )
+
+        n = len(conditions)
+        row_h = 0.11
+        top_y = 0.62
+        for k, (symbol, label, desc) in enumerate(conditions):
+            y = top_y - k * row_h
+            color = palette[k] if k < len(palette) else FG_COLOR
+            fig.text(
+                0.18, y, symbol,
+                ha="left", va="center", fontsize=34, color=color,
+                fontproperties=fonts.mincho, alpha=alpha,
+            )
+            fig.text(
+                0.27, y + 0.015, label,
+                ha="left", va="center", fontsize=18, color=FG_COLOR,
+                fontproperties=fonts.mincho, alpha=alpha,
+            )
+            fig.text(
+                0.27, y - 0.025, desc,
+                ha="left", va="center", fontsize=13, color="#9aa0a6",
+                fontproperties=fonts.mincho, alpha=alpha,
+            )
+
+        _draw_footer_chrome(fig, commit_hash, fonts)
+        frame_path = frames_dir / filename_template.format(start_index + i)
+        fig.savefig(frame_path, dpi=dpi)
+        plt.close(fig)
+        produced.append(frame_path)
+    return produced
+
+
+def write_finale_frames(
+    final_values: dict[str, float],
+    invested_total: float,
+    frames_dir: Path | str,
+    commit_hash: str,
+    num_frames: int,
+    *,
+    odometer_ratio: float = 0.55,
+    heading: str = "最終評価額",
+    start_index: int = 0,
+    fade_in_frames: int = 10,
+    dpi: int = DPI_720P,
+    figsize: tuple[float, float] = FIGSIZE_720P,
+    filename_template: str = "frame_{:05d}.png",
+) -> list[Path]:
+    """フィナーレカード。
+    final_values: {"A": ..., "B": ..., "C": ...}
+    odometer_ratio: 0→final までカウントアップに使うフレーム割合。
+    """
+    required_keys = {"A", "B", "C"}
+    if set(final_values) != required_keys:
+        raise ValueError(f"final_values keys must be {required_keys}, got {set(final_values)}")
+    if num_frames <= 0:
+        raise ValueError("num_frames must be positive")
+    if not 0.0 < odometer_ratio <= 1.0:
+        raise ValueError("odometer_ratio must be in (0, 1]")
+
+    frames_dir = Path(frames_dir)
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    _apply_dark_style()
+    fonts = _get_fonts()
+
+    fa = float(final_values["A"])
+    fb = float(final_values["B"])
+    fc = float(final_values["C"])
+
+    odometer_end = max(1, int(num_frames * odometer_ratio))
+
+    colors = [COLOR_A, COLOR_B, COLOR_C]
+    symbols = ["A", "B", "C"]
+    labels = ["完璧タイミング", "毎月積立", "最悪タイミング"]
+    targets = [fa, fb, fc]
+
+    produced: list[Path] = []
+    for i in range(num_frames):
+        alpha = _fade_alpha(i, num_frames, fade_in_frames)
+        if i < odometer_end:
+            t = (i + 1) / odometer_end
+            t = t * t
+            running = [t * v for v in targets]
+        else:
+            running = list(targets)
+
+        fig = _fresh_canvas(figsize, dpi)
+
+        fig.text(
+            0.5, 0.88, heading,
+            ha="center", va="center", fontsize=20, color="#b8b8b8",
+            fontproperties=fonts.mincho, alpha=alpha,
+        )
+
+        col_xs = [0.22, 0.50, 0.78]
+        for k in range(3):
+            fig.text(
+                col_xs[k], 0.70, symbols[k],
+                ha="center", va="center", fontsize=26, color=colors[k],
+                fontproperties=fonts.mincho, alpha=alpha,
+            )
+            fig.text(
+                col_xs[k], 0.64, labels[k],
+                ha="center", va="center", fontsize=12, color="#9aa0a6",
+                fontproperties=fonts.mincho, alpha=alpha,
+            )
+            fig.text(
+                col_xs[k], 0.48, f"¥{int(round(running[k])):,}",
+                ha="center", va="center", fontsize=32, color=FG_COLOR,
+                fontproperties=fonts.mono, alpha=alpha,
+            )
+
+        diff_a_b = targets[0] - targets[1]
+        diff_running = running[0] - running[1]
+        fig.text(
+            0.5, 0.28, "差額  A − B",
+            ha="center", va="center", fontsize=14, color="#9aa0a6",
+            fontproperties=fonts.mincho, alpha=alpha,
+        )
+        sign = "+" if diff_running >= 0 else "−"
+        fig.text(
+            0.5, 0.22, f"{sign}¥{int(round(abs(diff_running))):,}",
+            ha="center", va="center", fontsize=36, color=FG_COLOR,
+            fontproperties=fonts.mono, alpha=alpha,
+        )
+        fig.text(
+            0.5, 0.15, f"投資元本 ¥{int(round(invested_total)):,}",
+            ha="center", va="center", fontsize=11, color="#777777",
+            fontproperties=fonts.mincho, alpha=alpha,
+        )
+
+        _draw_footer_chrome(fig, commit_hash, fonts)
+        frame_path = frames_dir / filename_template.format(start_index + i)
+        fig.savefig(frame_path, dpi=dpi)
+        plt.close(fig)
+        produced.append(frame_path)
+    return produced
+
+
+def write_limits_frames(
+    bullets: list[str],
+    frames_dir: Path | str,
+    commit_hash: str,
+    num_frames: int,
+    *,
+    heading: str = "本検証の限界",
+    start_index: int = 0,
+    fade_in_frames: int = 10,
+    dpi: int = DPI_720P,
+    figsize: tuple[float, float] = FIGSIZE_720P,
+    filename_template: str = "frame_{:05d}.png",
+) -> list[Path]:
+    """「本検証の限界」カード。bullets を箇条書きで描画する。"""
+    if num_frames <= 0:
+        raise ValueError("num_frames must be positive")
+    if not bullets:
+        raise ValueError("bullets must not be empty")
+
+    frames_dir = Path(frames_dir)
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    _apply_dark_style()
+    fonts = _get_fonts()
+
+    produced: list[Path] = []
+    for i in range(num_frames):
+        alpha = _fade_alpha(i, num_frames, fade_in_frames)
+        fig = _fresh_canvas(figsize, dpi)
+        fig.text(
+            0.5, 0.85, heading,
+            ha="center", va="center", fontsize=22, color=FG_COLOR,
+            fontproperties=fonts.mincho, alpha=alpha,
+        )
+        row_h = 0.10
+        top_y = 0.65
+        for k, b in enumerate(bullets):
+            y = top_y - k * row_h
+            fig.text(
+                0.18, y, "・",
+                ha="left", va="center", fontsize=16, color="#888888",
+                fontproperties=fonts.mincho, alpha=alpha,
+            )
+            fig.text(
+                0.22, y, b,
+                ha="left", va="center", fontsize=14, color="#cccccc",
+                fontproperties=fonts.mincho, alpha=alpha,
+            )
+        _draw_footer_chrome(fig, commit_hash, fonts)
+        frame_path = frames_dir / filename_template.format(start_index + i)
+        fig.savefig(frame_path, dpi=dpi)
+        plt.close(fig)
+        produced.append(frame_path)
     return produced
 
 
@@ -320,6 +638,141 @@ def _build_ffmpeg_cmd(
         "-movflags", "+faststart",
         str(output_path),
     ]
+
+
+DEFAULT_EVENT_MARKERS: tuple[tuple[str, str], ...] = (
+    ("2000-03-31", "2000 dot-com"),
+    ("2008-09-30", "2008 GFC"),
+    ("2020-03-31", "2020 COVID"),
+)
+
+DEFAULT_QUESTION_LINES: tuple[str, ...] = (
+    "もし、毎月の積立タイミングを",
+    "完璧に予測できたら",
+    "差額は何円になるか",
+)
+
+DEFAULT_CONDITIONS: tuple[tuple[str, str, str], ...] = (
+    ("A", "完璧タイミング", "各年の最安月に 年間予算を一括投資 (in hindsight)"),
+    ("B", "毎月積立",     "各月に 年間予算 / 12 を等額投資"),
+    ("C", "最悪タイミング", "各年の最高月に 年間予算を一括投資 (in hindsight)"),
+)
+
+DEFAULT_LIMITS: tuple[str, ...] = (
+    "データ: S&P 500 Total Return（月末 close、配当再投資込）",
+    "「完璧タイミング」は後知恵（look-ahead）であり実行不可",
+    "税・手数料・為替・スリッページは未反映",
+    "過去の結果は将来の結果を示唆しない",
+)
+
+
+def render_timing_race_story(
+    result: pd.DataFrame,
+    output_path: Path | str,
+    commit_hash: str,
+    summary_final_values: dict[str, float],
+    invested_total: float,
+    frames_dir: Path | str | None = None,
+    fps: int = FRAMES_PER_SECOND_DEFAULT,
+    stride: int = 1,
+    race_max_frames: int | None = None,
+    freeze_last_seconds: float = 1.5,
+    keep_frames: bool = False,
+    cold_open_seconds: float = 3.5,
+    conditions_seconds: float = 3.0,
+    finale_seconds: float = 4.0,
+    limits_seconds: float = 3.5,
+    question_lines: tuple[str, ...] = DEFAULT_QUESTION_LINES,
+    conditions: tuple[tuple[str, str, str], ...] = DEFAULT_CONDITIONS,
+    limits: tuple[str, ...] = DEFAULT_LIMITS,
+    event_markers: tuple[tuple[str, str], ...] = DEFAULT_EVENT_MARKERS,
+) -> Path:
+    """v2 ストーリー版レンダラ。
+    Phase 構造: [cold open] → [conditions] → [race] → [finale] → [limits] → freeze。
+
+    既存 render_timing_race_video を破壊せず、並行して存在させる。
+    """
+    if stride < 1:
+        raise ValueError("stride must be >= 1")
+
+    result = _validate_result(result)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if frames_dir is None:
+        frames_dir = output_path.parent / f"{output_path.stem}_frames"
+    frames_dir = Path(frames_dir)
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
+    filename_template = "frame_{:05d}.png"
+
+    cold_frames = max(1, int(round(cold_open_seconds * fps)))
+    cond_frames = max(1, int(round(conditions_seconds * fps)))
+    fin_frames = max(1, int(round(finale_seconds * fps)))
+    lim_frames = max(1, int(round(limits_seconds * fps)))
+
+    cursor = 0
+
+    write_titlecard_frames(
+        list(question_lines), frames_dir, commit_hash,
+        num_frames=cold_frames, start_index=cursor,
+        filename_template=filename_template,
+    )
+    cursor += cold_frames
+
+    write_conditions_frames(
+        list(conditions), frames_dir, commit_hash,
+        num_frames=cond_frames, start_index=cursor,
+        filename_template=filename_template,
+    )
+    cursor += cond_frames
+
+    race_event_markers = [
+        (pd.Timestamp(d), lbl) for d, lbl in event_markers
+    ]
+    race_frames = write_timing_race_frames(
+        result=result,
+        frames_dir=frames_dir,
+        commit_hash=commit_hash,
+        stride=stride,
+        max_frames=race_max_frames,
+        filename_template=filename_template,
+        start_index=cursor,
+        event_markers=race_event_markers,
+    )
+    cursor += len(race_frames)
+
+    write_finale_frames(
+        final_values=summary_final_values,
+        invested_total=invested_total,
+        frames_dir=frames_dir,
+        commit_hash=commit_hash,
+        num_frames=fin_frames,
+        start_index=cursor,
+        filename_template=filename_template,
+    )
+    cursor += fin_frames
+
+    write_limits_frames(
+        list(limits), frames_dir, commit_hash,
+        num_frames=lim_frames, start_index=cursor,
+        filename_template=filename_template,
+    )
+    cursor += lim_frames
+
+    glob_pattern = str(frames_dir / "frame_%05d.png")
+    cmd = _build_ffmpeg_cmd(glob_pattern, output_path, fps, freeze_last_seconds)
+    logger.info("ffmpeg cmd: %s", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+    if not keep_frames:
+        for p in frames_dir.glob("frame_*.png"):
+            p.unlink(missing_ok=True)
+        try:
+            frames_dir.rmdir()
+        except OSError:
+            logger.debug("frames_dir not empty after cleanup: %s", frames_dir)
+
+    return output_path
 
 
 def render_timing_race_video(
