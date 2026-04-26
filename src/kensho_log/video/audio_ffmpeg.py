@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -73,6 +74,48 @@ def adjust_wav_duration(
     return Path(out)
 
 
+def concat_wavs_to_wav(
+    inputs: list[Path | str], out_wav: Path | str
+) -> Path:
+    """複数 WAV を 1 本に連結（同一サンプルレート/チャンネル前提、同じでなければ ffmpeg が再エンコード）.
+
+    実装: ffmpeg concat demuxer を使う。listfile を一時ファイルとして書く。
+    """
+    if not inputs:
+        raise ValueError("inputs must not be empty")
+    out = Path(out_wav)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    if len(inputs) == 1:
+        cmd = [
+            _ffmpeg(), "-y", "-hide_banner", "-loglevel", "warning",
+            "-i", str(inputs[0]), "-c:a", "pcm_s16le", str(out),
+        ]
+        subprocess.run(cmd, check=True)
+        return out
+
+    import tempfile
+    fd, tname = tempfile.mkstemp(prefix="kensho_concat_", suffix=".txt")
+    list_path = Path(tname)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        for p in inputs:
+            ap = Path(p).resolve()
+            esc = str(ap).replace("\\", "/").replace("'", r"'\''")
+            f.write(f"file '{esc}'\n")
+    try:
+        cmd = [
+            _ffmpeg(), "-y", "-hide_banner", "-loglevel", "warning",
+            "-f", "concat", "-safe", "0",
+            "-i", str(list_path),
+            "-c:a", "pcm_s16le", str(out),
+        ]
+        logger.info("ffmpeg concat: %s", " ".join(cmd))
+        subprocess.run(cmd, check=True)
+    finally:
+        list_path.unlink(missing_ok=True)
+    return out
+
+
 def mux_video_and_audio(
     video_path: Path | str, audio_wav: Path | str, out_path: Path | str
 ) -> Path:
@@ -87,4 +130,4 @@ def mux_video_and_audio(
     ]
     logger.info("ffmpeg mux: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
-    return Path(out)
+    return Path(out_path)

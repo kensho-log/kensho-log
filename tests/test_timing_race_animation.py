@@ -277,6 +277,34 @@ class TestRaceFrameIndices:
         )
         assert len(produced) == len(idxs)
 
+    def test_num_frames_mode_uniform(self):
+        idxs = tra.race_frame_indices(10, num_frames=5)
+        assert len(idxs) == 5
+        assert idxs[0] == 0
+        assert idxs[-1] == 9
+        assert idxs == sorted(idxs)
+
+    def test_num_frames_mode_oversample(self):
+        idxs = tra.race_frame_indices(5, num_frames=20)
+        assert len(idxs) == 20
+        assert idxs[0] == 0
+        assert idxs[-1] == 4
+
+    def test_num_frames_zero_raises(self):
+        with pytest.raises(ValueError):
+            tra.race_frame_indices(10, num_frames=0)
+
+    def test_num_frames_one_returns_last(self):
+        assert tra.race_frame_indices(10, num_frames=1) == [9]
+
+    def test_write_with_num_frames_mode(self, tmp_path):
+        result = _sample_result(8)
+        produced = tra.write_timing_race_frames(
+            result=result, frames_dir=tmp_path,
+            commit_hash="x" * 40, num_frames=12,
+        )
+        assert len(produced) == 12
+
     def test_telop_mismatch_raises(self, tmp_path):
         result = _sample_result(4)
         with pytest.raises(ValueError, match="telop_by_frame must have"):

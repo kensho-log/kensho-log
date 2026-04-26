@@ -97,13 +97,39 @@ def _apply_dark_style() -> None:
 
 
 def race_frame_indices(
-    n_rows: int, stride: int = 1, max_frames: int | None = None
+    n_rows: int,
+    stride: int = 1,
+    max_frames: int | None = None,
+    *,
+    num_frames: int | None = None,
 ) -> list[int]:
-    """`write_timing_race_frames` と同じ行インデックス列（`idxs`）。"""
-    if stride < 1:
-        raise ValueError("stride must be >= 1")
+    """`write_timing_race_frames` と同じ行インデックス列。
+
+    ``num_frames`` を指定した場合は ``stride`` / ``max_frames`` を無視し、
+    ``[0, n_rows-1]`` から num_frames 個の行をほぼ等間隔に選ぶ（最後の行は必ず含む）。
+    フレーム数 > n_rows の場合は同じ行を複数回サンプリングする（時間軸を伸ばす効果）。
+    """
     if n_rows < 1:
         raise ValueError("n_rows must be >= 1")
+    if num_frames is not None:
+        if num_frames < 1:
+            raise ValueError("num_frames must be >= 1")
+        if num_frames == 1:
+            return [n_rows - 1]
+        idxs: list[int] = []
+        last = n_rows - 1
+        for k in range(num_frames):
+            r = k / (num_frames - 1)
+            i = int(round(r * last))
+            if i < 0:
+                i = 0
+            elif i > last:
+                i = last
+            idxs.append(i)
+        idxs[-1] = last
+        return idxs
+    if stride < 1:
+        raise ValueError("stride must be >= 1")
     idxs = list(range(0, n_rows, stride))
     if idxs[-1] != n_rows - 1:
         idxs.append(n_rows - 1)
@@ -206,6 +232,7 @@ def write_timing_race_frames(
     three_pane: bool = False,
     telop_by_frame: list[str] | None = None,
     placeholder_label: str = "log  (CG placeholder)",
+    num_frames: int | None = None,
 ) -> list[Path]:
     """result DataFrame から PNG フレーム群を frames_dir に生成する。
 
@@ -224,7 +251,7 @@ def write_timing_race_frames(
     Returns:
         生成されたフレームの Path リスト（昇順）
     """
-    if stride < 1:
+    if num_frames is None and stride < 1:
         raise ValueError("stride must be >= 1")
 
     result = _validate_result(result)
@@ -245,7 +272,9 @@ def write_timing_race_frames(
     )
     y_cap = y_max * 1.08 if y_max > 0 else 1.0
 
-    idxs = race_frame_indices(len(result), stride, max_frames)
+    idxs = race_frame_indices(
+        len(result), stride, max_frames, num_frames=num_frames
+    )
 
     n_race = len(idxs)
     if three_pane and telop_by_frame is not None and len(telop_by_frame) != n_race:
