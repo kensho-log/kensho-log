@@ -1,0 +1,72 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- venv ----
+.venv/
+venv/
+env/
+
+# ---- IDE / OS ----
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+
+# ---- Secrets ----
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+credentials.json
+
+# ---- Data cache (re-downloadable; keep dirs, ignore contents) ----
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+*.parquet
+*.feather
+*.h5
+
+# ---- Build artifacts (keep dirs, ignore contents) ----
+output/videos/*
+output/figures/*
+output/tmp/*
+!output/videos/.gitkeep
+!output/figures/.gitkeep
+*.mp4
+*.mov
+*.wav
+*.mp3
+*.flac
+
+# ---- VOICEVOX / Whisper artifacts ----
+voicevox/
+whisper_cache/
+*.srt.tmp
+
+# ---- Notebook noise ----
+notebooks/.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ---- Logs ----
+*.log
+logs/
