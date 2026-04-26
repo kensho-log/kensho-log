@@ -45,6 +45,8 @@ data/processed/*
 *.parquet
 *.feather
 *.h5
+*.pkl
+*.pickle
 
 # ---- Build artifacts (keep dirs, ignore contents) ----
 output/videos/*

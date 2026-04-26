@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kensho-log"
+version = "0.1.0"
+description = "検証ログ | Finance Brute-Force Lab - shared simulation code"
+requires-python = ">=3.12"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra --strict-markers"
+filterwarnings = [
+    "ignore::DeprecationWarning:yfinance.*",
+    "ignore::FutureWarning:pandas.*",
+]
