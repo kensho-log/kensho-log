@@ -1,5 +1,7 @@
 # 検証ログ | Finance Brute-Force Lab
 
+[![CI](https://github.com/kensho-log/kensho-log/actions/workflows/ci.yml/badge.svg)](https://github.com/kensho-log/kensho-log/actions/workflows/ci.yml)
+
 投資の通説は、本当に正しいのか。  
 過去データを総当たりで計算し、その差分だけを提示する検証ログ。
 
