@@ -8,6 +8,7 @@
 - 画素は 1280x720 を基本、拡張時も 1920x1080 まで
 """
 
+from .story_v3 import render_timing_race_story_v3
 from .timing_race_animation import (
     DEFAULT_CONDITIONS,
     DEFAULT_EVENT_MARKERS,
@@ -15,6 +16,7 @@ from .timing_race_animation import (
     DEFAULT_QUESTION_LINES,
     FRAMES_PER_SECOND_DEFAULT,
     FfmpegNotFoundError,
+    race_frame_indices,
     render_timing_race_story,
     render_timing_race_video,
     write_conditions_frames,
@@ -23,6 +25,7 @@ from .timing_race_animation import (
     write_timing_race_frames,
     write_titlecard_frames,
 )
+from .voicevox import is_engine_up, synthesize_wav
 
 __all__ = [
     "DEFAULT_CONDITIONS",
@@ -31,8 +34,12 @@ __all__ = [
     "DEFAULT_QUESTION_LINES",
     "FRAMES_PER_SECOND_DEFAULT",
     "FfmpegNotFoundError",
+    "is_engine_up",
+    "race_frame_indices",
     "render_timing_race_story",
+    "render_timing_race_story_v3",
     "render_timing_race_video",
+    "synthesize_wav",
     "write_conditions_frames",
     "write_finale_frames",
     "write_limits_frames",

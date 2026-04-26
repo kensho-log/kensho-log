@@ -263,3 +263,35 @@ class TestFfmpegCommandBuilder:
         monkeypatch.setattr(tra.shutil, "which", lambda _: None)
         with pytest.raises(tra.FfmpegNotFoundError):
             tra._ffmpeg_binary()
+
+
+class TestRaceFrameIndices:
+    def test_matches_write_count(self, tmp_path):
+        result = _sample_result(10)
+        idxs = tra.race_frame_indices(10, 3, None)
+        produced = tra.write_timing_race_frames(
+            result=result,
+            frames_dir=tmp_path,
+            commit_hash="b" * 40,
+            stride=3,
+        )
+        assert len(produced) == len(idxs)
+
+    def test_telop_mismatch_raises(self, tmp_path):
+        result = _sample_result(4)
+        with pytest.raises(ValueError, match="telop_by_frame must have"):
+            tra.write_timing_race_frames(
+                result=result,
+                frames_dir=tmp_path,
+                commit_hash="b" * 40,
+                three_pane=True,
+                telop_by_frame=["a"],
+            )
+
+    def test_title_three_pane(self, tmp_path):
+        produced = tra.write_titlecard_frames(
+            ["a", "b"], tmp_path, "c" * 40, num_frames=2,
+            three_pane=True, bottom_telop="下にテロップ。",
+        )
+        assert len(produced) == 2
+        assert all(_is_png(p) for p in produced)

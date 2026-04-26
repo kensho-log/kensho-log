@@ -96,6 +96,22 @@ def _apply_dark_style() -> None:
     rcParams["text.color"] = FG_COLOR
 
 
+def race_frame_indices(
+    n_rows: int, stride: int = 1, max_frames: int | None = None
+) -> list[int]:
+    """`write_timing_race_frames` と同じ行インデックス列（`idxs`）。"""
+    if stride < 1:
+        raise ValueError("stride must be >= 1")
+    if n_rows < 1:
+        raise ValueError("n_rows must be >= 1")
+    idxs = list(range(0, n_rows, stride))
+    if idxs[-1] != n_rows - 1:
+        idxs.append(n_rows - 1)
+    if max_frames is not None and max_frames > 0:
+        idxs = idxs[:max_frames]
+    return idxs
+
+
 def _validate_result(result: pd.DataFrame) -> pd.DataFrame:
     required = {
         "close", "A_value", "B_value", "C_value",
@@ -128,6 +144,52 @@ def _draw_footer_chrome(fig, commit_hash: str, fonts: _FontPair) -> None:
     )
 
 
+def _wrap_telop_lines(text: str, max_chars: int) -> list[str]:
+    t = (text or "").strip()
+    if not t:
+        return []
+    lines: list[str] = []
+    rest = t
+    while rest:
+        if len(rest) <= max_chars:
+            lines.append(rest)
+            break
+        lines.append(rest[:max_chars])
+        rest = rest[max_chars:].lstrip()
+    return lines
+
+
+def _draw_bottom_telop(
+    fig, text: str, fonts: _FontPair, *, alpha: float = 1.0, fontsize: int = 11,
+) -> None:
+    if not (text and text.strip()):
+        return
+    lines = _wrap_telop_lines(text.strip(), 32)[:3]
+    y0 = 0.10
+    for j, line in enumerate(lines):
+        fig.text(
+            0.5, y0 - j * 0.032, line,
+            ha="center", va="top", fontsize=fontsize, color=FG_COLOR,
+            fontproperties=fonts.mincho, alpha=alpha, clip_on=False,
+        )
+
+
+def _add_right_character_placeholder(
+    fig, fonts: _FontPair, label: str, *, alpha: float = 1.0,
+) -> None:
+    axr = fig.add_axes([0.70, 0.20, 0.28, 0.70])
+    axr.set_facecolor("#1a1a1c")
+    axr.patch.set_edgecolor(GRID_COLOR)
+    axr.patch.set_linewidth(0.5)
+    axr.set_xticks([])
+    axr.set_yticks([])
+    axr.text(
+        0.5, 0.5, label,
+        ha="center", va="center", fontsize=10, color="#5a5a5a", alpha=alpha,
+        fontproperties=fonts.mincho, transform=axr.transAxes,
+    )
+
+
 def write_timing_race_frames(
     result: pd.DataFrame,
     frames_dir: Path | str,
@@ -141,6 +203,9 @@ def write_timing_race_frames(
     filename_template: str = "frame_{:05d}.png",
     start_index: int = 0,
     event_markers: list[tuple[pd.Timestamp, str]] | None = None,
+    three_pane: bool = False,
+    telop_by_frame: list[str] | None = None,
+    placeholder_label: str = "log  (CG placeholder)",
 ) -> list[Path]:
     """result DataFrame から PNG フレーム群を frames_dir に生成する。
 
@@ -180,11 +245,14 @@ def write_timing_race_frames(
     )
     y_cap = y_max * 1.08 if y_max > 0 else 1.0
 
-    idxs = list(range(0, len(result), stride))
-    if idxs[-1] != len(result) - 1:
-        idxs.append(len(result) - 1)
-    if max_frames is not None and max_frames > 0:
-        idxs = idxs[:max_frames]
+    idxs = race_frame_indices(len(result), stride, max_frames)
+
+    n_race = len(idxs)
+    if three_pane and telop_by_frame is not None and len(telop_by_frame) != n_race:
+        raise ValueError(
+            f"telop_by_frame must have {n_race} lines (one per frame), got {len(telop_by_frame)}"
+        )
+    tlines = (telop_by_frame if telop_by_frame is not None else [""] * n_race) if three_pane else []
 
     marker_list = list(event_markers or [])
 
@@ -193,7 +261,12 @@ def write_timing_race_frames(
         slice_end = row_i + 1
         visible = result.iloc[:slice_end]
 
-        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+        if not three_pane:
+            fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+        else:
+            fig = plt.figure(figsize=figsize, dpi=dpi)
+            fig.patch.set_facecolor(BG_COLOR)
+            ax = fig.add_axes((0.08, 0.25, 0.60, 0.64))
         ax.set_facecolor(BG_COLOR)
 
         ax.plot(x_full, [float("nan")] * len(x_full))
@@ -240,56 +313,106 @@ def write_timing_race_frames(
                     fontproperties=fonts.mincho, alpha=0.85,
                 )
 
-        fig.text(
-            0.03, 0.955, title,
-            ha="left", va="top", fontsize=18, color=FG_COLOR,
-            fontproperties=fonts.mincho,
-        )
-        fig.text(
-            0.03, 0.915, subtitle,
-            ha="left", va="top", fontsize=11, color="#aaaaaa",
-            fontproperties=fonts.mincho,
-        )
-
-        fig.text(
-            0.97, 0.955, current_date.strftime("%Y-%m"),
-            ha="right", va="top", fontsize=13, color=FG_COLOR,
-            fontproperties=fonts.mono,
-        )
-
-        last = visible.iloc[-1]
-        box_x = 0.98
-        box_y = 0.42
-        line_h = 0.06
-
-        for i, (label, value, color) in enumerate(
-            [
-                ("A", last["A_value"], COLOR_A),
-                ("B", last["B_value"], COLOR_B),
-                ("C", last["C_value"], COLOR_C),
-            ]
-        ):
+        if not three_pane:
             fig.text(
-                box_x - 0.16, box_y - i * line_h, label,
-                ha="right", va="center", fontsize=12, color=color,
+                0.03, 0.955, title,
+                ha="left", va="top", fontsize=18, color=FG_COLOR,
                 fontproperties=fonts.mincho,
             )
             fig.text(
-                box_x, box_y - i * line_h, _format_jpy(value),
-                ha="right", va="center", fontsize=15, color=FG_COLOR,
+                0.03, 0.915, subtitle,
+                ha="left", va="top", fontsize=11, color="#aaaaaa",
+                fontproperties=fonts.mincho,
+            )
+
+            fig.text(
+                0.97, 0.955, current_date.strftime("%Y-%m"),
+                ha="right", va="top", fontsize=13, color=FG_COLOR,
                 fontproperties=fonts.mono,
             )
 
-        fig.text(
-            box_x, box_y - 3 * line_h, "invested",
-            ha="right", va="center", fontsize=9, color="#888888",
-            fontproperties=fonts.mincho,
-        )
-        fig.text(
-            box_x, box_y - 3.7 * line_h, _format_jpy(last["A_invested_cum"]),
-            ha="right", va="center", fontsize=11, color="#aaaaaa",
-            fontproperties=fonts.mono,
-        )
+        last = visible.iloc[-1]
+        if not three_pane:
+            box_x = 0.98
+            box_y = 0.42
+            line_h = 0.06
+
+            for j, (label, value, color) in enumerate(
+                [
+                    ("A", last["A_value"], COLOR_A),
+                    ("B", last["B_value"], COLOR_B),
+                    ("C", last["C_value"], COLOR_C),
+                ]
+            ):
+                fig.text(
+                    box_x - 0.16, box_y - j * line_h, label,
+                    ha="right", va="center", fontsize=12, color=color,
+                    fontproperties=fonts.mincho,
+                )
+                fig.text(
+                    box_x, box_y - j * line_h, _format_jpy(value),
+                    ha="right", va="center", fontsize=15, color=FG_COLOR,
+                    fontproperties=fonts.mono,
+                )
+
+            fig.text(
+                box_x, box_y - 3 * line_h, "invested",
+                ha="right", va="center", fontsize=9, color="#888888",
+                fontproperties=fonts.mincho,
+            )
+            fig.text(
+                box_x, box_y - 3.7 * line_h, _format_jpy(last["A_invested_cum"]),
+                ha="right", va="center", fontsize=11, color="#aaaaaa",
+                fontproperties=fonts.mono,
+            )
+        else:
+            fig.text(
+                0.08, 0.955, title,
+                ha="left", va="top", fontsize=15, color=FG_COLOR,
+                fontproperties=fonts.mincho,
+            )
+            fig.text(
+                0.08, 0.915, subtitle,
+                ha="left", va="top", fontsize=9, color="#aaaaaa",
+                fontproperties=fonts.mincho,
+            )
+            fig.text(
+                0.64, 0.955, current_date.strftime("%Y-%m"),
+                ha="right", va="top", fontsize=11, color=FG_COLOR,
+                fontproperties=fonts.mono,
+            )
+            y_rows = (0.58, 0.45, 0.32)
+            for j, (lab, value, col) in enumerate(
+                [
+                    ("A", last["A_value"], COLOR_A),
+                    ("B", last["B_value"], COLOR_B),
+                    ("C", last["C_value"], COLOR_C),
+                ]
+            ):
+                y = y_rows[j]
+                ax.text(
+                    0.95, y + 0.03, lab,
+                    ha="right", va="bottom", fontsize=9, color=col,
+                    fontproperties=fonts.mincho, transform=ax.transAxes,
+                )
+                ax.text(
+                    0.95, y, _format_jpy(value),
+                    ha="right", va="top", fontsize=10, color=FG_COLOR,
+                    fontproperties=fonts.mono, transform=ax.transAxes,
+                )
+            ax.text(
+                0.95, 0.16, "invested", ha="right", va="top",
+                fontsize=7, color="#888888", fontproperties=fonts.mincho,
+                transform=ax.transAxes,
+            )
+            ax.text(
+                0.95, 0.1, _format_jpy(last["A_invested_cum"]),
+                ha="right", va="top", fontsize=8, color="#aaaaaa",
+                fontproperties=fonts.mono, transform=ax.transAxes,
+            )
+            _add_right_character_placeholder(fig, fonts, placeholder_label)
+            if tlines[fi].strip():
+                _draw_bottom_telop(fig, tlines[fi], fonts, fontsize=9)
 
         ax.get_legend().remove() if ax.get_legend() else None
 
@@ -332,6 +455,9 @@ def write_titlecard_frames(
     filename_template: str = "frame_{:05d}.png",
     font_size: int = 30,
     line_spacing: float = 0.09,
+    three_pane: bool = False,
+    bottom_telop: str = "",
+    placeholder_label: str = "log  (CG placeholder)",
 ) -> list[Path]:
     """黒背景のタイトルカード（疑問提示用）を num_frames 枚生成する。
 
@@ -356,14 +482,33 @@ def write_titlecard_frames(
     for i in range(num_frames):
         alpha = _fade_alpha(i, num_frames, fade_in_frames)
         fig = _fresh_canvas(figsize, dpi)
-        for j, text in enumerate(lines):
-            y = center_y - j * line_spacing
-            fig.text(
-                0.5, y, text,
-                ha="center", va="center",
-                fontsize=font_size, color=FG_COLOR,
-                fontproperties=fonts.mincho, alpha=alpha,
-            )
+        if not three_pane:
+            for j, text in enumerate(lines):
+                y = center_y - j * line_spacing
+                fig.text(
+                    0.5, y, text,
+                    ha="center", va="center",
+                    fontsize=font_size, color=FG_COLOR,
+                    fontproperties=fonts.mincho, alpha=alpha,
+                )
+        else:
+            ax_left = fig.add_axes((0.06, 0.20, 0.62, 0.70))
+            ax_left.set_facecolor(BG_COLOR)
+            ax_left.set_xlim(0, 1)
+            ax_left.set_ylim(0, 1)
+            ax_left.axis("off")
+            cy = 0.5 + (n - 1) * (line_spacing * 0.6) / 2
+            fs = int(font_size * 0.85) if n > 2 else font_size
+            for j, text in enumerate(lines):
+                yl = cy - j * line_spacing * 0.6
+                ax_left.text(
+                    0.5, yl, text,
+                    ha="center", va="center", transform=ax_left.transAxes,
+                    fontsize=fs, color=FG_COLOR, fontproperties=fonts.mincho, alpha=alpha,
+                )
+            _add_right_character_placeholder(fig, fonts, placeholder_label, alpha=alpha)
+            if bottom_telop:
+                _draw_bottom_telop(fig, bottom_telop, fonts, alpha=alpha, fontsize=10)
         _draw_footer_chrome(fig, commit_hash, fonts)
         frame_path = frames_dir / filename_template.format(start_index + i)
         fig.savefig(frame_path, dpi=dpi)
@@ -384,6 +529,9 @@ def write_conditions_frames(
     dpi: int = DPI_720P,
     figsize: tuple[float, float] = FIGSIZE_720P,
     filename_template: str = "frame_{:05d}.png",
+    three_pane: bool = False,
+    bottom_telop: str = "",
+    placeholder_label: str = "log  (CG placeholder)",
 ) -> list[Path]:
     """条件カード。conditions = [(symbol, label, description), ...]。"""
     if num_frames <= 0:
@@ -402,35 +550,68 @@ def write_conditions_frames(
     for i in range(num_frames):
         alpha = _fade_alpha(i, num_frames, fade_in_frames)
         fig = _fresh_canvas(figsize, dpi)
-
-        fig.text(
-            0.5, 0.82, heading,
-            ha="center", va="center", fontsize=22, color=FG_COLOR,
-            fontproperties=fonts.mincho, alpha=alpha,
-        )
-
-        n = len(conditions)
-        row_h = 0.11
-        top_y = 0.62
-        for k, (symbol, label, desc) in enumerate(conditions):
-            y = top_y - k * row_h
-            color = palette[k] if k < len(palette) else FG_COLOR
+        if not three_pane:
             fig.text(
-                0.18, y, symbol,
-                ha="left", va="center", fontsize=34, color=color,
-                fontproperties=fonts.mincho, alpha=alpha,
-            )
-            fig.text(
-                0.27, y + 0.015, label,
-                ha="left", va="center", fontsize=18, color=FG_COLOR,
-                fontproperties=fonts.mincho, alpha=alpha,
-            )
-            fig.text(
-                0.27, y - 0.025, desc,
-                ha="left", va="center", fontsize=13, color="#9aa0a6",
+                0.5, 0.82, heading,
+                ha="center", va="center", fontsize=22, color=FG_COLOR,
                 fontproperties=fonts.mincho, alpha=alpha,
             )
 
+            n = len(conditions)
+            row_h = 0.11
+            top_y = 0.62
+            for k, (symbol, label, desc) in enumerate(conditions):
+                y = top_y - k * row_h
+                color = palette[k] if k < len(palette) else FG_COLOR
+                fig.text(
+                    0.18, y, symbol,
+                    ha="left", va="center", fontsize=34, color=color,
+                    fontproperties=fonts.mincho, alpha=alpha,
+                )
+                fig.text(
+                    0.27, y + 0.015, label,
+                    ha="left", va="center", fontsize=18, color=FG_COLOR,
+                    fontproperties=fonts.mincho, alpha=alpha,
+                )
+                fig.text(
+                    0.27, y - 0.025, desc,
+                    ha="left", va="center", fontsize=13, color="#9aa0a6",
+                    fontproperties=fonts.mincho, alpha=alpha,
+                )
+        else:
+            axc = fig.add_axes((0.04, 0.18, 0.64, 0.76))
+            axc.set_facecolor(BG_COLOR)
+            axc.set_xlim(0, 1)
+            axc.set_ylim(0, 1)
+            axc.axis("off")
+            axc.text(
+                0.5, 0.90, heading,
+                ha="center", va="center", fontsize=19, color=FG_COLOR,
+                fontproperties=fonts.mincho, alpha=alpha, transform=axc.transAxes,
+            )
+            row_h, top_y = 0.20, 0.68
+            n = len(conditions)
+            for k, (symbol, label, desc) in enumerate(conditions):
+                y = top_y - k * row_h
+                color = palette[k] if k < len(palette) else FG_COLOR
+                axc.text(
+                    0.08, y, symbol,
+                    ha="left", va="center", fontsize=30, color=color,
+                    fontproperties=fonts.mincho, alpha=alpha, transform=axc.transAxes,
+                )
+                axc.text(
+                    0.22, y + 0.04, label,
+                    ha="left", va="center", fontsize=15, color=FG_COLOR,
+                    fontproperties=fonts.mincho, alpha=alpha, transform=axc.transAxes,
+                )
+                axc.text(
+                    0.22, y, desc,
+                    ha="left", va="top", fontsize=10, color="#9aa0a6",
+                    fontproperties=fonts.mincho, alpha=alpha, transform=axc.transAxes,
+                )
+            _add_right_character_placeholder(fig, fonts, placeholder_label, alpha=alpha)
+            if bottom_telop:
+                _draw_bottom_telop(fig, bottom_telop, fonts, alpha=alpha, fontsize=10)
         _draw_footer_chrome(fig, commit_hash, fonts)
         frame_path = frames_dir / filename_template.format(start_index + i)
         fig.savefig(frame_path, dpi=dpi)
@@ -453,6 +634,9 @@ def write_finale_frames(
     dpi: int = DPI_720P,
     figsize: tuple[float, float] = FIGSIZE_720P,
     filename_template: str = "frame_{:05d}.png",
+    three_pane: bool = False,
+    bottom_telop: str = "",
+    placeholder_label: str = "log  (CG placeholder)",
 ) -> list[Path]:
     """フィナーレカード。
     final_values: {"A": ..., "B": ..., "C": ...}
@@ -493,49 +677,97 @@ def write_finale_frames(
             running = list(targets)
 
         fig = _fresh_canvas(figsize, dpi)
-
-        fig.text(
-            0.5, 0.88, heading,
-            ha="center", va="center", fontsize=20, color="#b8b8b8",
-            fontproperties=fonts.mincho, alpha=alpha,
-        )
-
-        col_xs = [0.22, 0.50, 0.78]
-        for k in range(3):
+        if not three_pane:
             fig.text(
-                col_xs[k], 0.70, symbols[k],
-                ha="center", va="center", fontsize=26, color=colors[k],
+                0.5, 0.88, heading,
+                ha="center", va="center", fontsize=20, color="#b8b8b8",
                 fontproperties=fonts.mincho, alpha=alpha,
             )
+
+            col_xs = [0.22, 0.50, 0.78]
+            for k in range(3):
+                fig.text(
+                    col_xs[k], 0.70, symbols[k],
+                    ha="center", va="center", fontsize=26, color=colors[k],
+                    fontproperties=fonts.mincho, alpha=alpha,
+                )
+                fig.text(
+                    col_xs[k], 0.64, labels[k],
+                    ha="center", va="center", fontsize=12, color="#9aa0a6",
+                    fontproperties=fonts.mincho, alpha=alpha,
+                )
+                fig.text(
+                    col_xs[k], 0.48, f"¥{int(round(running[k])):,}",
+                    ha="center", va="center", fontsize=32, color=FG_COLOR,
+                    fontproperties=fonts.mono, alpha=alpha,
+                )
+
+            diff_a_b = targets[0] - targets[1]
+            diff_running = running[0] - running[1]
             fig.text(
-                col_xs[k], 0.64, labels[k],
-                ha="center", va="center", fontsize=12, color="#9aa0a6",
+                0.5, 0.28, "差額  A − B",
+                ha="center", va="center", fontsize=14, color="#9aa0a6",
                 fontproperties=fonts.mincho, alpha=alpha,
             )
+            sign = "+" if diff_running >= 0 else "−"
             fig.text(
-                col_xs[k], 0.48, f"¥{int(round(running[k])):,}",
-                ha="center", va="center", fontsize=32, color=FG_COLOR,
+                0.5, 0.22, f"{sign}¥{int(round(abs(diff_running))):,}",
+                ha="center", va="center", fontsize=36, color=FG_COLOR,
                 fontproperties=fonts.mono, alpha=alpha,
             )
-
-        diff_a_b = targets[0] - targets[1]
-        diff_running = running[0] - running[1]
-        fig.text(
-            0.5, 0.28, "差額  A − B",
-            ha="center", va="center", fontsize=14, color="#9aa0a6",
-            fontproperties=fonts.mincho, alpha=alpha,
-        )
-        sign = "+" if diff_running >= 0 else "−"
-        fig.text(
-            0.5, 0.22, f"{sign}¥{int(round(abs(diff_running))):,}",
-            ha="center", va="center", fontsize=36, color=FG_COLOR,
-            fontproperties=fonts.mono, alpha=alpha,
-        )
-        fig.text(
-            0.5, 0.15, f"投資元本 ¥{int(round(invested_total)):,}",
-            ha="center", va="center", fontsize=11, color="#777777",
-            fontproperties=fonts.mincho, alpha=alpha,
-        )
+            fig.text(
+                0.5, 0.15, f"投資元本 ¥{int(round(invested_total)):,}",
+                ha="center", va="center", fontsize=11, color="#777777",
+                fontproperties=fonts.mincho, alpha=alpha,
+            )
+        else:
+            axc = fig.add_axes((0.04, 0.12, 0.64, 0.80))
+            axc.set_facecolor(BG_COLOR)
+            axc.set_xlim(0, 1)
+            axc.set_ylim(0, 1)
+            axc.axis("off")
+            axc.text(
+                0.5, 0.90, heading,
+                ha="center", va="center", fontsize=16, color="#b8b8b8",
+                fontproperties=fonts.mincho, alpha=alpha, transform=axc.transAxes,
+            )
+            col_xs = (0.18, 0.50, 0.82)
+            for k in range(3):
+                axc.text(
+                    col_xs[k], 0.70, symbols[k],
+                    ha="center", va="center", fontsize=22, color=colors[k],
+                    fontproperties=fonts.mincho, alpha=alpha, transform=axc.transAxes,
+                )
+                axc.text(
+                    col_xs[k], 0.64, labels[k],
+                    ha="center", va="center", fontsize=9, color="#9aa0a6",
+                    fontproperties=fonts.mincho, alpha=alpha, transform=axc.transAxes,
+                )
+                axc.text(
+                    col_xs[k], 0.44, f"¥{int(round(running[k])):,}",
+                    ha="center", va="center", fontsize=20, color=FG_COLOR,
+                    fontproperties=fonts.mono, alpha=alpha, transform=axc.transAxes,
+                )
+            diff_running = running[0] - running[1]
+            axc.text(
+                0.5, 0.25, "差額  A − B",
+                ha="center", va="center", fontsize=11, color="#9aa0a6",
+                fontproperties=fonts.mincho, alpha=alpha, transform=axc.transAxes,
+            )
+            sign = "+" if diff_running >= 0 else "−"
+            axc.text(
+                0.5, 0.16, f"{sign}¥{int(round(abs(diff_running))):,}",
+                ha="center", va="center", fontsize=24, color=FG_COLOR,
+                fontproperties=fonts.mono, alpha=alpha, transform=axc.transAxes,
+            )
+            axc.text(
+                0.5, 0.06, f"投資元本 ¥{int(round(invested_total)):,}",
+                ha="center", va="center", fontsize=9, color="#777777",
+                fontproperties=fonts.mincho, alpha=alpha, transform=axc.transAxes,
+            )
+            _add_right_character_placeholder(fig, fonts, placeholder_label, alpha=alpha)
+            if bottom_telop:
+                _draw_bottom_telop(fig, bottom_telop, fonts, alpha=alpha, fontsize=9)
 
         _draw_footer_chrome(fig, commit_hash, fonts)
         frame_path = frames_dir / filename_template.format(start_index + i)
@@ -557,6 +789,9 @@ def write_limits_frames(
     dpi: int = DPI_720P,
     figsize: tuple[float, float] = FIGSIZE_720P,
     filename_template: str = "frame_{:05d}.png",
+    three_pane: bool = False,
+    bottom_telop: str = "",
+    placeholder_label: str = "log  (CG placeholder)",
 ) -> list[Path]:
     """「本検証の限界」カード。bullets を箇条書きで描画する。"""
     if num_frames <= 0:
@@ -573,25 +808,53 @@ def write_limits_frames(
     for i in range(num_frames):
         alpha = _fade_alpha(i, num_frames, fade_in_frames)
         fig = _fresh_canvas(figsize, dpi)
-        fig.text(
-            0.5, 0.85, heading,
-            ha="center", va="center", fontsize=22, color=FG_COLOR,
-            fontproperties=fonts.mincho, alpha=alpha,
-        )
-        row_h = 0.10
-        top_y = 0.65
-        for k, b in enumerate(bullets):
-            y = top_y - k * row_h
+        if not three_pane:
             fig.text(
-                0.18, y, "・",
-                ha="left", va="center", fontsize=16, color="#888888",
+                0.5, 0.85, heading,
+                ha="center", va="center", fontsize=22, color=FG_COLOR,
                 fontproperties=fonts.mincho, alpha=alpha,
             )
-            fig.text(
-                0.22, y, b,
-                ha="left", va="center", fontsize=14, color="#cccccc",
-                fontproperties=fonts.mincho, alpha=alpha,
+            row_h = 0.10
+            top_y = 0.65
+            for k, b in enumerate(bullets):
+                y = top_y - k * row_h
+                fig.text(
+                    0.18, y, "・",
+                    ha="left", va="center", fontsize=16, color="#888888",
+                    fontproperties=fonts.mincho, alpha=alpha,
+                )
+                fig.text(
+                    0.22, y, b,
+                    ha="left", va="center", fontsize=14, color="#cccccc",
+                    fontproperties=fonts.mincho, alpha=alpha,
+                )
+        else:
+            axc = fig.add_axes((0.04, 0.12, 0.64, 0.80))
+            axc.set_facecolor(BG_COLOR)
+            axc.set_xlim(0, 1)
+            axc.set_ylim(0, 1)
+            axc.axis("off")
+            axc.text(
+                0.5, 0.88, heading,
+                ha="center", va="center", fontsize=19, color=FG_COLOR,
+                fontproperties=fonts.mincho, alpha=alpha, transform=axc.transAxes,
             )
+            row_h, top_y = 0.11, 0.68
+            for k, b in enumerate(bullets):
+                y = top_y - k * row_h
+                axc.text(
+                    0.06, y, "・",
+                    ha="left", va="center", fontsize=13, color="#888888",
+                    fontproperties=fonts.mincho, alpha=alpha, transform=axc.transAxes,
+                )
+                axc.text(
+                    0.1, y, b,
+                    ha="left", va="center", fontsize=9, color="#cccccc",
+                    fontproperties=fonts.mincho, alpha=alpha, transform=axc.transAxes,
+                )
+            _add_right_character_placeholder(fig, fonts, placeholder_label, alpha=alpha)
+            if bottom_telop:
+                _draw_bottom_telop(fig, bottom_telop, fonts, alpha=alpha, fontsize=9)
         _draw_footer_chrome(fig, commit_hash, fonts)
         frame_path = frames_dir / filename_template.format(start_index + i)
         fig.savefig(frame_path, dpi=dpi)

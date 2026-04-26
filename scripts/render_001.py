@@ -3,6 +3,7 @@
 使い方:
     python scripts/render_001.py                    # v1: レースのみ
     python scripts/render_001.py --v2               # v2: 疑問提示→条件→レース→フィナーレ→限界
+    python scripts/render_001.py --v3 --no-audio   # v3: 3ペイン+台本テロップ（映像のみ、TTS 省略）
     python scripts/render_001.py --smoke            # 先頭 24 フレームのみの動作確認
     python scripts/render_001.py --stride 3         # 3ヶ月に1フレーム
 
@@ -31,6 +32,7 @@ from kensho_log.video import (  # noqa: E402
     FRAMES_PER_SECOND_DEFAULT,
     FfmpegNotFoundError,
     render_timing_race_story,
+    render_timing_race_story_v3,
     render_timing_race_video,
 )
 
@@ -91,28 +93,38 @@ def main() -> int:
         "--v2", action="store_true",
         help="render v2 story version (cold open + conditions + race + finale + limits)",
     )
+    parser.add_argument(
+        "--v3", action="store_true",
+        help="v3: 3 pane + bottom telop + optional VOICEVOX (use --no-audio for video-only)",
+    )
+    parser.add_argument(
+        "--no-audio", action="store_true",
+        help="with --v3: skip TTS; output video-only (no engine required)",
+    )
     args = parser.parse_args()
 
     result = _load_result(INPUT_CSV)
     commit = _get_commit_hash()
 
     logger.info(
-        "input=%s rows=%d stride=%d fps=%d smoke=%s v2=%s commit=%s",
+        "input=%s rows=%d stride=%d fps=%d smoke=%s v2=%s v3=%s no_audio=%s commit=%s",
         INPUT_CSV.relative_to(REPO_ROOT), len(result), args.stride, args.fps,
-        args.smoke, args.v2, commit[:12],
+        args.smoke, args.v2, args.v3, args.no_audio, commit[:12],
     )
 
     max_frames = 24 if args.smoke else None
     output = args.output
     if not output.is_absolute():
         output = (REPO_ROOT / output).resolve()
-    if args.v2 and output == OUTPUT_MP4:
+    if args.v2 and not args.v3 and output == OUTPUT_MP4:
         output = output.with_name("001_timing_race_v2.mp4")
+    if args.v3 and output == OUTPUT_MP4:
+        output = output.with_name("001_timing_race_v3.mp4")
     if args.smoke and output.name.endswith(".mp4"):
         output = output.with_name(output.stem + "_smoke.mp4")
 
     try:
-        if args.v2:
+        if args.v2 and not args.v3:
             final_a = float(result["A_value"].iloc[-1])
             final_b = float(result["B_value"].iloc[-1])
             final_c = float(result["C_value"].iloc[-1])
@@ -133,6 +145,29 @@ def main() -> int:
                 finale_seconds=0.5 if args.smoke else 4.0,
                 limits_seconds=0.3 if args.smoke else 3.5,
             )
+        elif args.v3:
+            final_a = float(result["A_value"].iloc[-1])
+            final_b = float(result["B_value"].iloc[-1])
+            final_c = float(result["C_value"].iloc[-1])
+            invested_total = float(result["A_invested_cum"].iloc[-1])
+            r = render_timing_race_story_v3(
+                result=result,
+                output_path=output,
+                commit_hash=commit,
+                summary_final_values={"A": final_a, "B": final_b, "C": final_c},
+                invested_total=invested_total,
+                fps=args.fps,
+                stride=args.stride,
+                race_max_frames=max_frames,
+                freeze_last_seconds=1.5,
+                keep_frames=args.keep_frames,
+                cold_open_seconds=0.5 if args.smoke else 3.5,
+                conditions_seconds=0.3 if args.smoke else 3.0,
+                finale_seconds=0.5 if args.smoke else 4.0,
+                limits_seconds=0.3 if args.smoke else 3.5,
+                synthesize_audio=not args.no_audio,
+            )
+            written = Path(r["video"])
         else:
             written = render_timing_race_video(
                 result=result,
