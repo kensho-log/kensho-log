@@ -41,6 +41,14 @@ class SP500DataError(RuntimeError):
     """S&P 500 データ取得に失敗した場合に送出される例外。"""
 
 
+class StooqApikeyRequired(SP500DataError):
+    """Stooq が apikey を要求している（2026 以降のポリシー変更）場合に送出。
+
+    呼び出し側では二重化クロスチェックの graceful degradation を行う合図として扱う。
+    環境変数 STOOQ_APIKEY を設定すれば回避可能。
+    """
+
+
 @dataclass(frozen=True)
 class CrossCheckResult:
     """二重化検証の結果。
@@ -123,20 +131,76 @@ def _fetch_yfinance(
     return df[["Close"]].astype(np.float32).rename(columns={"Close": "close"})
 
 
+def _fmt_stooq_date(d: str | date | None) -> str | None:
+    if d is None:
+        return None
+    if isinstance(d, str):
+        d = pd.to_datetime(d).date()
+    return d.strftime("%Y%m%d")
+
+
 def _fetch_stooq(
     ticker: str,
     start: str | date | None,
     end: str | date | None,
 ) -> pd.DataFrame:
-    """Stooq から日次データを取得。pandas_datareader 経由。"""
-    from pandas_datareader import data as pdr
+    """Stooq から日次データを取得（直接 CSV エンドポイント）。
 
-    df = pdr.DataReader(ticker, "stooq", start=start, end=end)
-    if df is None or df.empty:
-        raise SP500DataError(f"stooq returned empty DataFrame for {ticker}")
+    2026 年以降 Stooq は CSV ダウンロードに apikey を要求するようになった。
+    環境変数 ``STOOQ_APIKEY`` が設定されていればクエリに付加する。
+    apikey が無く、Stooq が apikey 要求レスポンスを返した場合は
+    ``StooqApikeyRequired`` を送出する（呼び出し側で degradation 判断）。
 
-    df = df.sort_index()
-    df.index = pd.to_datetime(df.index).tz_localize(None)
+    pandas_datareader 0.10 は Python 3.12 で distutils 依存の問題と
+    Stooq レスポンス変化への脆弱性があるため、公開 CSV エンドポイントを
+    直接叩く軽量実装に統一する。
+    """
+    import os
+    from urllib.request import Request, urlopen
+
+    params = {"s": ticker.lower(), "i": "d"}
+    d1 = _fmt_stooq_date(start)
+    d2 = _fmt_stooq_date(end)
+    if d1:
+        params["d1"] = d1
+    if d2:
+        params["d2"] = d2
+    apikey = os.environ.get("STOOQ_APIKEY", "").strip()
+    if apikey:
+        params["apikey"] = apikey
+    query = "&".join(f"{k}={v}" for k, v in params.items())
+    url = f"https://stooq.com/q/d/l/?{query}"
+
+    try:
+        req = Request(url, headers={"User-Agent": "kensho-log/0.1 (+https://github.com/kensho-log)"})
+        with urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except Exception as exc:
+        raise SP500DataError(f"stooq fetch failed for {ticker}: {exc}") from exc
+
+    head = body.lstrip()[:400].lower()
+    if "apikey" in head and "," not in head.splitlines()[0]:
+        raise StooqApikeyRequired(
+            f"stooq requires apikey for {ticker} (set STOOQ_APIKEY env var). "
+            f"First 120 chars of response: {body[:120]!r}"
+        )
+
+    from io import StringIO
+
+    try:
+        df = pd.read_csv(StringIO(body))
+    except Exception as exc:
+        raise SP500DataError(f"stooq CSV parse failed for {ticker}: {exc}") from exc
+
+    if df is None or df.empty or "Date" not in df.columns or "Close" not in df.columns:
+        raise SP500DataError(
+            f"stooq returned unexpected payload for {ticker}: "
+            f"columns={list(df.columns) if df is not None else None}"
+        )
+
+    df["Date"] = pd.to_datetime(df["Date"])
+    df = df.set_index("Date").sort_index()
+    df.index = df.index.tz_localize(None)
     df.index.name = "date"
     return df[["Close"]].astype(np.float32).rename(columns={"Close": "close"})
 
@@ -265,16 +329,32 @@ def fetch_sp500(
     price_yf = _load_with_cache(
         TICKER_PRICE_YF, "yfinance", start, end, cache_dir, refresh
     )
-    price_stooq = _load_with_cache(
-        TICKER_PRICE_STOOQ, "stooq", start, end, cache_dir, refresh
-    )
-    cross = _cross_check(
-        price_yf,
-        price_stooq,
-        source_a=f"yfinance:{TICKER_PRICE_YF}",
-        source_b=f"stooq:{TICKER_PRICE_STOOQ}",
-        tolerance_pct=tolerance_pct,
-    )
+    try:
+        price_stooq = _load_with_cache(
+            TICKER_PRICE_STOOQ, "stooq", start, end, cache_dir, refresh
+        )
+        cross = _cross_check(
+            price_yf,
+            price_stooq,
+            source_a=f"yfinance:{TICKER_PRICE_YF}",
+            source_b=f"stooq:{TICKER_PRICE_STOOQ}",
+            tolerance_pct=tolerance_pct,
+        )
+    except StooqApikeyRequired as exc:
+        logger.warning(
+            "stooq apikey required; cross-check degraded. set STOOQ_APIKEY to enable. (%s)",
+            exc,
+        )
+        cross = CrossCheckResult(
+            source_a=f"yfinance:{TICKER_PRICE_YF}",
+            source_b=f"stooq:{TICKER_PRICE_STOOQ} (unavailable: apikey required)",
+            max_diff_pct=float("nan"),
+            mean_diff_pct=float("nan"),
+            overlap_start=None,
+            overlap_end=None,
+            passed=False,
+            tolerance_pct=tolerance_pct,
+        )
 
     if series == "total_return":
         df = _load_with_cache(

@@ -3,4 +3,7 @@ numpy>=2.0,<3.0
 matplotlib>=3.9,<4.0
 yfinance>=0.2.40
 pandas-datareader>=0.10.0
+# pandas-datareader 0.10 still imports distutils; Python 3.12 removes it from stdlib
+# so we pin setuptools explicitly (setuptools provides a distutils shim).
+setuptools>=69
 pytest>=8.0,<9.0
