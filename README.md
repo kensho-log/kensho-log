@@ -107,6 +107,17 @@ pip install -r requirements.txt
 pytest
 ```
 
+### 仮説 001 ワンショット実行
+
+```powershell
+# データ取得 → 計算 → docs/runs/001-*.md へ透明性ログ出力
+python scripts/run_001.py
+
+# 上記の CSV を入力に mp4 を生成（FFmpeg が PATH 上にある必要あり）
+python scripts/render_001.py            # 本番: 420 frames / 16 sec / ~500KB
+python scripts/render_001.py --smoke    # 先頭 24 frames での動作確認
+```
+
 ---
 
 ## 公開物
